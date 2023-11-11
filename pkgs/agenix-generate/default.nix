@@ -1,5 +1,5 @@
-{ lib, stdenv, rage, jq, nix, mktemp, diffutils, substituteAll
-, ageBin ? "${rage}/bin/rage", shellcheck, }:
+{ lib, stdenv, rage, jq, nix, substituteAll, ageBin ? "${rage}/bin/rage"
+, shellcheck, }:
 
 stdenv.mkDerivation rec {
   pname = "agenix-generate";
