@@ -7,6 +7,9 @@
   outputs = { self, nixpkgs, flake-utils }:
     flake-utils.lib.eachDefaultSystem (system: {
       formatter = nixpkgs.legacyPackages.${system}.nixfmt;
+
+      packages.agenix-check =
+        nixpkgs.legacyPackages.${system}.callPackage ./pkgs/agenix-check { };
       packages.agenix-generate =
         nixpkgs.legacyPackages.${system}.callPackage ./pkgs/agenix-generate { };
       packages.default = self.packages.${system}.agenix-generate;
