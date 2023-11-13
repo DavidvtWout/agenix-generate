@@ -14,6 +14,8 @@ The following attributes can be defined for secrets;
 - `generator.followArgs`: Defaults to false. Regenerate secret if args changes. Only taken into account when meta file is used.
 - `generator.followDeps`: Defaults to true. Regenerate secret if dependencies changes. Only taken into account when meta file is used.
 
+All other attributes under `generator` are ignored.
+
 If no `generator` attribute is found, the secret is ignored by `agenix-generate`. This way,
 `agenix-generate` is fully backwards-compatible with `agenix`.
 

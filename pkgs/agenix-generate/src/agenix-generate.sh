@@ -26,7 +26,7 @@ function show_help() {
   echo "age version: $(@ageBin@ --version)"
 }
 
-FILE=""
+NAME=""
 ALL=false
 FORCE=false
 IDENTITY=${AGENIX_IDENTITY:-""}
@@ -72,22 +72,21 @@ while test $# -gt 0; do
     exit 1
     ;;
   *)
-    if [[ "$FILE" != "" ]]; then
+    if [[ "$NAME" != "" ]]; then
       echo >&2 "only one file can be specified"
       exit 1
     fi
-    FILE="$1"
+    NAME="$1"
     shift
     ;;
   esac
 done
 
-
-if [[ $ALL == false ]] && [[ $FILE == "" ]]; then
+if [[ $ALL == false ]] && [[ $NAME == "" ]]; then
   echo >&2 "Either a file must be specified or the --all flag must be set"
   exit 1
 fi
-if [[ $ALL == true ]] && [[ $FILE != "" ]]; then
+if [[ $ALL == true ]] && [[ $NAME != "" ]]; then
   echo >&2 "Either a file must be specified or the --all flag must be set. Not both."
   exit 1
 fi
@@ -96,8 +95,9 @@ if [[ $ALL == true ]] && [[ $FORCE == true ]]; then
   exit 1
 fi
 
-# TODO: check if secrets.nix and generators.nix exist
+DECRYPT="@ageBin@ --decrypt -i $IDENTITY"
 
+# TODO: check if secrets.nix and generators.nix exist
 
 echo "Running $PACKAGE from directory $(pwd) with;"
 echo "  secrets file:    $RULES"
@@ -109,84 +109,79 @@ echo
 
 # TODO: print args and dependencies when (re)generating?
 function rekey-or-generate {
-  GENERATOR=$(@nixEval@ --raw -f "$RULES" \""$FILE\".generator.name" 2>/dev/null || echo "")
+  generator=$(echo "$SECRET" | jq -r '.value.generator.name')
 
   # Secret does not yet exist. Either generate, or skip.
-  if [[ ! (-f "$FILE") ]] && [[ $GENERATOR != "" ]]; then
-    echo -e "\033[1;92mGenerating   \033[0;1m$FILE\033[0m with generator ${GENERATOR}"
+  if [[ ! (-f "$NAME") ]] && [[ $generator != "null" ]]; then
+    echo -e "\033[1;92mGenerating   \033[0;1m$NAME\033[0m with generator $generator"
     generate
     return
   fi
-  if [[ ! (-f "$FILE") ]] && [[ $GENERATOR == "" ]]; then
-    echo -e "\033[1;93mSkipping     \033[0;1m$FILE\033[1;93m because no generator defined!\033[0m"
+  if [[ ! (-f "$NAME") ]] && [[ $generator == "null" ]]; then
+    echo -e "\033[1;93mSkipping     \033[0;1m$NAME\033[1;93m because no generator defined!\033[0m"
     update-meta false
     return
   fi
 
   if [[ "$META" != "" ]]; then
-    CHECK_META=$(@nixEval@ --impure --json --expr "(import @checkMetaNix@) {secretName=\"$FILE\"; secretsPath=\"$RULES\"; metaPath=\"$META\";}")
-
-    DEPS_UPDATED=$(echo -e "$CHECK_META" | @jqBin@ -r .regenBecauseDeps)
-    if [[ $DEPS_UPDATED == true ]]; then
-      echo -e "\033[1;94mRegenerating \033[0;1m$FILE\033[0m because the dependencies changed"
+    deps_updated=$(echo "$SECRET" | jq -r '.value.generator.regenBecauseDeps')
+    if [[ $deps_updated == true ]]; then
+      echo -e "\033[1;94mRegenerating \033[0;1m$NAME\033[0m because the dependencies changed"
       generate
       return
     fi
 
-    ARGS_UPDATED=$(echo -e "$CHECK_META" | @jqBin@ -r .regenBecauseArgs)
-    if [[ $ARGS_UPDATED == true ]]; then
-      echo -e "\033[1;94mRegenerating \033[0;1m$FILE\033[0m because the generator args changed"
+    args_updated=$(echo "$SECRET" | jq -r '.value.generator.regenBecauseArgs')
+    if [[ $args_updated == true ]]; then
+      echo -e "\033[1;94mRegenerating \033[0;1m$NAME\033[0m because the generator args changed"
       generate
       return
     fi
 
-    IN_META=$(echo -e "$CHECK_META" | @jqBin@ -r .inMeta)
-    if [[ $IN_META != true ]]; then
-      echo -e "\033[1;94mRekeying     \033[0;1m$FILE\033[0m because it is not in the meta file"
+    in_meta=$(echo "$SECRET" | jq -r '.value.generator.inMeta')
+    if [[ $in_meta != true ]]; then
+      echo -e "\033[1;94mRekeying     \033[0;1m$NAME\033[0m because it is not in the meta file"
       rekey
       return
     fi
 
-    PUBKEYS_UPDATED=$(echo -e "$CHECK_META" | @jqBin@ -r .pubkeysChanged)
-    if [[ $PUBKEYS_UPDATED == true ]]; then
-      echo -e "\033[1;94mRekeying     \033[0;1m$FILE\033[0m because the publicKeys changed"
+    pubkeys_updated=$(echo "$SECRET" | jq -r '.value.generator.pubkeysChanged')
+    if [[ $pubkeys_updated == true ]]; then
+      echo -e "\033[1;94mRekeying     \033[0;1m$NAME\033[0m because the publicKeys changed"
       rekey
       return
     fi
   fi
 
-  if [[ -f "$FILE" ]] && [[ $FORCE == true ]]; then
-    echo -e "\033[1;95mRegenerating \033[0;1m$FILE\033[1;95m because --force flag is set\033[0m"
+  if [[ -f "$NAME" ]] && [[ $FORCE == true ]]; then
+    echo -e "\033[1;95mRegenerating \033[0;1m$NAME\033[1;95m because --force flag is set\033[0m"
     generate
     return
   fi
 
   # If none of the above conditions matched, the secret can safely be skipped.
-  echo -e "\033[2mSkipping     $FILE because it already exists\033[0m"
+  echo -e "\033[2mSkipping     $NAME because it already exists\033[0m"
 }
 
 function rekey {
-  KEYS=$( (@nixEval@ --json -f "$RULES" \""$FILE\".publicKeys" | @jqBin@ -r .[]) || exit 1)
+  KEYS=$( (@nixEval@ --json -f "$RULES" \""$NAME\".publicKeys" | @jqBin@ -r .[]) || exit 1)
   ENCRYPT_ARGS=(--encrypt)
   while IFS= read -r key; do
     ENCRYPT_ARGS+=(-r "$key")
   done <<<"$KEYS"
-  ENCRYPT_ARGS+=(-o "$FILE")
+  ENCRYPT_ARGS+=(-o "$NAME")
 
-  @ageBin@ --decrypt -i "$IDENTITY" "$FILE" | @ageBin@ "${ENCRYPT_ARGS[@]}"
+  @ageBin@ --decrypt -i "$IDENTITY" "$NAME" | @ageBin@ "${ENCRYPT_ARGS[@]}"
   update-meta false
 }
 
 function generate {
-  DECRYPT="@ageBin@ --decrypt -i $IDENTITY"
-  SCRIPT=$(@nixEval@ --impure --raw --expr "(import @generateNix@) {secretName=\"$FILE\"; decrypt=\"$DECRYPT\"; generatorsPath=\"$GENERATORS\"; secretsPath=\"$RULES\";}" || exit 1)
-
-  KEYS=$( (@nixEval@ --json -f "$RULES" \""$FILE\".publicKeys" | @jqBin@ -r .[]) || exit 1)
+  KEYS=$( (@nixEval@ --json -f "$RULES" \""$NAME\".publicKeys" | @jqBin@ -r .[]) || exit 1)
   ENCRYPT_ARGS=(--encrypt)
   while IFS= read -r key; do
     ENCRYPT_ARGS+=(-r "$key")
   done <<<"$KEYS"
-  ENCRYPT_ARGS+=(-o "$FILE")
+  ENCRYPT_ARGS+=(-o "$NAME")
 
   eval "$SCRIPT" | @ageBin@ "${ENCRYPT_ARGS[@]}"
   update-meta true
@@ -198,13 +193,15 @@ function update-meta {
   fi
   REGENERATED="$1"
   TIMESTAMP=$(date +%s)
-  NEW_META=$(@nixEval@ --impure --json --expr "(import @updateMetaNix@) {secretName=\"$FILE\"; regenerated=$REGENERATED; timestamp=$TIMESTAMP; secretsPath=\"$RULES\"; metaPath=\"$META\";}")
+  # TODO: use SECRET meta instead of name
+  NEW_META=$(@nixEval@ --impure --json --expr "(import @updateMetaNix@) {secretName=\"$NAME\"; regenerated=$REGENERATED; timestamp=$TIMESTAMP; secretsPath=\"$RULES\"; metaPath=\"$META\";}")
   echo "$NEW_META" >"$META"
 }
 
 function generate-all {
-  FILES=$( (@nixEval@ --impure --json --expr "(import @orderSecretsNix@) {secretsPath=\"$RULES\";}" | @jqBin@ -r .[]) || exit 1)
-  for FILE in $FILES; do
+  secrets=$(@nixEval@ --impure --json --expr "(import @loadSecretsNix@) {secretsPath=\"$RULES\"; generatorsPath=\"$GENERATORS\"; metaPath=\"$META\"; decrypt=\"$DECRYPT\";}")
+  echo "$secrets" | @jqBin@ -c '.[]' | while read -r SECRET; do
+    NAME=$(echo "$SECRET" | jq -r '.name')
     rekey-or-generate
   done
 
@@ -219,5 +216,6 @@ fi
 if [[ $ALL == true ]]; then
   generate-all
 else
+  # TODO: create SECRET variable from NAME
   rekey-or-generate
 fi
