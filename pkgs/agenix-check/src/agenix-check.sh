@@ -20,9 +20,7 @@ function show_help() {
   echo 'RULES environment variable with path to Nix file specifying recipient public keys.'
   echo "Defaults to './secrets.nix'"
   echo ' '
-  echo "agenix version: @version@"
-  echo "age binary path: @ageBin@"
-  echo "age version: $(@ageBin@ --version)"
+  echo "agenix-check version: @version@"
 }
 
 function error {

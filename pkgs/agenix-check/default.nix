@@ -1,15 +1,14 @@
-{ lib, stdenv, rage, jq, nix, substituteAll, ageBin ? "${rage}/bin/rage"
-, shellcheck, }:
+{ lib, stdenv, rage, jq, nix, substituteAll, shellcheck, }:
 
 stdenv.mkDerivation rec {
   pname = "agenix-check";
   version = "0.0.0";
   src = substituteAll {
-    inherit ageBin version;
+    src = ./src/agenix-check.sh;
+    checkMetaNix = ./src/check-meta.nix;
+    inherit version;
     jqBin = "${jq}/bin/jq";
     nixEval = "${nix}/bin/nix eval";
-    src = ./agenix-check.sh;
-    checkMetaNix = ./check-meta.nix;
   };
   dontUnpack = true;
 
