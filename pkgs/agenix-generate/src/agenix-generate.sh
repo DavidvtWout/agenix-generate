@@ -183,7 +183,8 @@ function generate {
   done <<<"$KEYS"
   ENCRYPT_ARGS+=(-o "$NAME")
 
-  eval "$SCRIPT" | @ageBin@ "${ENCRYPT_ARGS[@]}"
+  script=$(echo "$SECRET" | jq -r '.value.generator.script')
+  eval "$script" | @ageBin@ "${ENCRYPT_ARGS[@]}"
   update-meta true
 }
 
@@ -191,10 +192,9 @@ function update-meta {
   if [[ $META == "" ]]; then
     return
   fi
-  REGENERATED="$1"
+  GENERATED="$1"
   TIMESTAMP=$(date +%s)
-  # TODO: use SECRET meta instead of name
-  NEW_META=$(@nixEval@ --impure --json --expr "(import @updateMetaNix@) {secretName=\"$NAME\"; regenerated=$REGENERATED; timestamp=$TIMESTAMP; secretsPath=\"$RULES\"; metaPath=\"$META\";}")
+  NEW_META=$(@nixEval@ --impure --json --expr "(import @updateMetaNix@) {secretName=\"$NAME\"; generated=$GENERATED; timestamp=$TIMESTAMP; secretsPath=\"$RULES\"; metaPath=\"$META\";}")
   echo "$NEW_META" >"$META"
 }
 
@@ -207,6 +207,8 @@ function generate-all {
 
   # TODO: warn about secrets not defined in secrets.nix
   # TODO: remove old secrets from meta
+
+  # TODO: generate META all at once using $secrets
 }
 
 if [[ $META != "" ]] && [[ ! -f "$META" ]]; then
