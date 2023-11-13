@@ -7,6 +7,8 @@ let
   meta =
     if useMeta then builtins.fromJSON (builtins.readFile metaPath) else { };
 
+  hash = x: builtins.hashString "sha256" (builtins.toJSON x);
+
   setDefaults = name: secret:
     let
       publicKeys = secret.publicKeys or [ ];
@@ -24,7 +26,7 @@ let
         generatorFunction = generators.${generator.name};
         deps = map (name: {
           path = name;
-          meta = builtins.getAttr name secrets;
+          meta = secrets.${name};
         }) generator.dependencies;
         args = { inherit decrypt deps; } // generator.args;
       in if generator.name != null then generatorFunction args else null;
@@ -32,12 +34,12 @@ let
       # Derived from other values
       extraAttributes = let
         secretMeta = meta.${name} or { };
-        metaPublicKeys = secretMeta.publicKeys or [ ];
+        metaPublicKeys = secretMeta.publicKeys or (hash [ ]);
         g = secretMeta.generator or { };
         metaGenerator = {
           name = g.name or null;
-          args = g.args or { };
-          dependencies = g.dependencies or [ ];
+          args = g.args or (hash { });
+          dependencies = g.dependencies or (hash [ ]);
         };
       in rec {
         needRekey = useMeta && (!inMeta || pubkeysChanged);
@@ -46,10 +48,11 @@ let
         hasGenerator = generator.name != null;
         inMeta = builtins.hasAttr name meta;
 
-        pubkeysChanged = publicKeys != metaPublicKeys;
+        pubkeysChanged = (hash publicKeys) != metaPublicKeys;
         nameChanged = generator.name != metaGenerator.name;
-        argsChanged = generator.args != metaGenerator.args;
-        depsChanged = generator.dependencies != metaGenerator.dependencies;
+        argsChanged = (hash generator.args) != metaGenerator.args;
+        depsChanged = (hash generator.dependencies)
+          != metaGenerator.dependencies;
 
         regenBecauseArgs = useMeta && hasGenerator && (!inMeta
           || (generator.followArgs && (argsChanged || nameChanged)));

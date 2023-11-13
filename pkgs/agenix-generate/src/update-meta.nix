@@ -1,64 +1,43 @@
-{ secretName, regenerated, metaPath, secretsPath, timestamp }:
+{ secretName, generated, metaPath, secretsPath, timestamp }:
 
 let
   secrets = import secretsPath;
   meta = if builtins.pathExists metaPath then
     builtins.fromJSON (builtins.readFile metaPath)
   else
-    throw "update-meta: ${metaPath} does not exist!";
+    throw "update-meta: META path ${metaPath} does not exist";
 
-  # Copied from attrsets.nix and converted to builtins.
-  filterAttrs = pred: set:
-    builtins.listToAttrs (builtins.concatMap (name:
-      let value = set.${name};
-      in if pred name value then [{ inherit name value; }] else [ ])
-      (builtins.attrNames set));
+  hash = x: builtins.hashString "sha256" (builtins.toJSON x);
 
-  # Create a generator with empty values if it did not exist and filter out all
-  # values that are not added to the meta file.
-  sanitizeGenerator = secret:
-    let
-      generator = {
-        name = null;
-        args = { };
-        dependencies = [ ];
-      } // (if (builtins.hasAttr "generator" secret) && secret.generator
-      != null then
-        filterAttrs
-        (name: _: builtins.elem name [ "name" "args" "dependencies" ])
-        secret.generator
-      else
-        { });
-    in secret // { inherit generator; };
+  secret = secrets.${secretName};
+  metaSecret = meta.${secretName} or { modified = timestamp; };
 
-  secret =
-    filterAttrs (name: _: builtins.elem name [ "publicKeys" "generator" ])
-    (sanitizeGenerator secrets.${secretName});
+  publicKeysHash = hash (secret.publicKeys or [ ]);
+  metaPublicKeys = metaSecret.publicKeys or "";
+  isModified = (publicKeysHash != metaPublicKeys) || generated;
 
-  metaSecret = if builtins.hasAttr secretName meta then
-    filterAttrs (name: _:
-      builtins.elem name [ "publicKeys" "generator" "created" "modified" ])
-    (sanitizeGenerator meta.${secretName})
-  else {
-    inherit (secret) publicKeys generator;
-    created = timestamp;
-    modified = timestamp;
-  };
+  # If the secret is already in meta, all the existing fields are preserved when
+  # making an updated meta set for the secret. This is a done deliberately because
+  # then the meta file may also be used for other purposes by other programs.
+  updatedMetaSecret = let
+    g = secret.generator or { };
+    metaG = metaSecret.generator or { };
+    generator = if !generated && metaG != { } then {
+      generator = metaG;
+    } else if generated then {
+      generator = let
+        args =
+          if builtins.hasAttr "args" g then { args = hash g.args; } else { };
+        dependencies = if builtins.hasAttr "dependencies" g then {
+          dependencies = hash g.dependencies;
+        } else
+          { };
+      in metaG // { name = g.name; } // args // dependencies;
+    } else
+      { };
+  in metaSecret // {
+    publicKeys = publicKeysHash;
+    modified = if isModified then timestamp else metaSecret.modified;
+  } // generator;
 
-  newMeta = let
-    isModified = (metaSecret.publicKeys != secret.publicKeys) || regenerated;
-
-    newMetaSecret = (meta.${secretName} or metaSecret) // {
-      publicKeys = secret.publicKeys;
-      generator =
-        let g = if regenerated then secret.generator else metaSecret.generator;
-        in if g.name == null then
-          null
-        else
-          filterAttrs (_: value: value != [ ] && value != { }) g;
-      modified = if isModified then timestamp else metaSecret.modified;
-    };
-
-  in meta // { ${secretName} = newMetaSecret; };
-
-in newMeta
+in meta // { ${secretName} = updatedMetaSecret; }
