@@ -29,6 +29,7 @@ function show_help() {
 NAME=""
 ALL=false
 FORCE=false
+DELETE=false
 IDENTITY=${AGENIX_IDENTITY:-""}
 RULES=${AGENIX_RULES:-$(realpath ./secrets.nix)}
 GENERATORS=${AGENIX_GENERATORS:-$(realpath ./generators.nix)}
@@ -66,6 +67,10 @@ while test $# -gt 0; do
   -a | --all)
     shift
     ALL=true
+    ;;
+  -d | --delete)
+    shift
+    DELETE=true
     ;;
   -*)
     echo >&2 "unknown option $1"
@@ -206,7 +211,10 @@ function generate-all {
   done
 
   # TODO: warn about secrets not defined in secrets.nix
-  # TODO: remove old secrets from meta
+
+  if [[ $DELETE == true ]]; then
+    echo TODO: remove old secrets from meta
+  fi
 
   # TODO: generate META all at once using $secrets
 }
