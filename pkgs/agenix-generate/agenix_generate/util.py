@@ -70,16 +70,37 @@ def hash_pubicKeys(secret: Secret) -> str:
 
 def get_generator_names(args: argparse.Namespace) -> List[str]:
     if not args.generators.exists():
-        print(f"\033[1;95mwarning:\033[0m generators file '{args.generators}' does not exist")
+        print(f"\033[1;35mwarning:\033[0m generators file '{args.generators}' does not exist")
         return []
 
     # TODO: error handling
     result = subprocess.run(
         ["nix", "eval", "--json", "--impure", "--expr",
          f"builtins.attrNames (import {args.generators.absolute()})"],
-        capture_output=True, text=True
+        capture_output=True, text=True, check=True,
     )
     return json.loads(result.stdout)
+
+
+def make_generator_function(args: argparse.Namespace, secret: Secret) -> str:
+    # TODO: also support generators that are simply a string instead of a function?
+    expression = (
+        f"let"
+        f"  decrypt = \"rage --decrypt -i {args.identity.absolute()}\";"  # TODO
+        f"  secrets = import \"{args.rules.absolute()}\";"
+        f"  generators = import \"{args.generators.absolute()}\";"
+        f"  secret = secrets.\"{secret.name}\";"
+        f"  generator = generators.${{secret.generator.name}};"
+        f"  deps = map (name: {{"
+        f"    path = name;"
+        f"    meta = secrets.${{name}};"
+        f"  }}) secret.generator.dependencies;"
+        f""
+        f"in generator {{ inherit decrypt deps; }}"
+    )
+    result = subprocess.run(["nix", "eval", "--impure", "--raw", "--expr", expression],
+                            capture_output=True, text=True, check=True)
+    return result.stdout
 
 
 def load_secrets(args: argparse.Namespace) -> List[Secret]:
@@ -88,7 +109,8 @@ def load_secrets(args: argparse.Namespace) -> List[Secret]:
         exit(1)
 
     # TODO: error handling
-    result = subprocess.run(["nix", "eval", "--json", "-f", args.rules], capture_output=True, text=True)
+    result = subprocess.run(["nix", "eval", "--json", "-f", args.rules],
+                            capture_output=True, text=True, check=True)
 
     secrets = list()
     secrets_raw = json.loads(result.stdout)
@@ -124,7 +146,10 @@ def input_yes_no(question, default="yes") -> bool:
 
     while True:
         print(question + prompt, end="")
-        choice = input().lower()
+        try:
+            choice = input().lower()
+        except KeyboardInterrupt:
+            return False
         if choice == "" and default is not None:
             print()
             return valid[default]

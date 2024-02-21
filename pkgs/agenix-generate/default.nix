@@ -8,7 +8,7 @@ python3Packages.buildPythonPackage rec {
   src = ./.;
 
   nativeBuildInputs = with python3Packages; [ setuptools ];
-  propagatedBuildInputs = [ ];
+  propagatedBuildInputs = [ rage ];
 
   meta = {
     description = "agenix extension tool that automates generation of secrets";

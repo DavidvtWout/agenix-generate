@@ -2,13 +2,13 @@ import argparse
 import json
 import os
 from pathlib import Path
-from typing import Dict, List, Set
+from typing import Dict, List, Set, Tuple
 
-from .util import Secret, SecretName, load_secrets, save_state, hash_dependencies, hash_pubicKeys, input_yes_no
-
-
-def check_secrets(secrets: List[Secret], generator_names: List[str]):
-    pass
+from .util import (
+    Secret, SecretName, load_secrets, save_state,
+    hash_dependencies, hash_pubicKeys, input_yes_no,
+    make_generator_function,
+)
 
 
 def sort_secrets(secrets: List[Secret]):
@@ -72,7 +72,7 @@ def make_plan(args: argparse.Namespace, states: Dict, secrets: List[Secret]):
         if not path.exists():
             # Secret does not exist and can't be generated. Should be generated manually.
             if not secret.generator:
-                print(f"\033[1;95mwarning:\033[0m {secret.name} does not exist on disk and has no generator.")
+                print(f"\033[1;35mwarning:\033[0m {secret.name} does not exist on disk and has no generator.")
             else:
                 jobs.append((secret, "generate"))
             continue
@@ -80,7 +80,7 @@ def make_plan(args: argparse.Namespace, states: Dict, secrets: List[Secret]):
         # Secret file exists but is not in state file. Rekey or generate to update state file.
         if state is None:
             print(
-                f"\033[1;95mwarning:\033[0m {secret.name} exists but is not in the state file. This should never happen.")
+                f"\033[1;35mwarning:\033[0m {secret.name} exists but is not in the state file. This should never happen.")
             if secret.generator and secret.generator.dependencies:
                 jobs.append((secret, "regenerate"))
             else:
@@ -106,6 +106,15 @@ def make_plan(args: argparse.Namespace, states: Dict, secrets: List[Secret]):
     # TODO: regenerate secrets depending on (re)generated secrets
 
     return jobs
+
+
+def execute_jobs(args: argparse.Namespace, jobs: List[Tuple[Secret, str]]):
+    for secret, operation in jobs:
+        if operation == "generate" or operation == "regenerate":
+            generator_function = make_generator_function(args, secret)
+            print(secret.name)
+            print(generator_function)
+            print()
 
 
 def main():
@@ -161,7 +170,7 @@ def main():
         state = json.load(file)
 
     if not args.identity:
-        print("\033[1;95mwarning:\033[0m No identity file provided. This makes rekeying secrets or "
+        print("\033[1;35mwarning:\033[0m No identity file provided. This makes rekeying secrets or "
               "generating secrets with dependencies impossible.")
 
     secrets = load_secrets(args)
@@ -178,14 +187,14 @@ def main():
         jobs = make_plan(args, state, secrets)
 
         print("The following operations will be performed:")
-        colours = {"rekey": "92", "generate": "92", "regenerate": "95", "delete": "91"}
+        colours = {"rekey": "92", "generate": "92", "regenerate": "35", "delete": "91"}
         for secret, operation in jobs:
             print(f"- \033[1;{colours[operation]}m{operation: <10}\033[0m {secret.name}")
         if not args.yes and not input_yes_no("Do you want to continue?"):
             exit(0)
         print()
 
-        # TODO: generate/rekey secrets
+        execute_jobs(args, jobs)
 
 
 if __name__ == '__main__':
