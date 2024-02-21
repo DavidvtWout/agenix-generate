@@ -84,8 +84,8 @@ This file is required for agenix-generate to work. `agenix-generate --init .` wi
 working directory.
 
 This file describes the state of the secrets.
-`publicKeys`: hash of all the public keys used to generate a secret.
-`generator.dependencies`: hash of the names of the dependencies that the secret was generated with.
+`publicKeysHash`: hash of all the public keys used to generate a secret.
+`dependenciesHash`: hash of the names of the dependencies that the secret was generated with.
 `lastRekeyed`:
 `lastGenerated`:
 

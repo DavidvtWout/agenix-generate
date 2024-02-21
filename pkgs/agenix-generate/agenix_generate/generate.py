@@ -4,6 +4,7 @@ import os
 import subprocess
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
+from datetime import datetime
 
 from .util import (
     Secret, SecretName, load_secrets, save_states,
@@ -50,12 +51,12 @@ def make_job(states, secret: Secret) -> Optional[str]:
     # Secret file exists and secret is in the state file.
 
     # Check if secret needs to be regenerated.
-    dependencies_state = state.get("generator", dict()).get("dependencies")
+    dependencies_state = state.get("dependenciesHash")
     dependencies_hash = hash_dependencies(secret)
     if dependencies_state == dependencies_hash and dependencies_hash is not None:
         return "regenerate"
 
-    publicKeys_state = state.get("publicKeys")
+    publicKeys_state = state.get("publicKeysHash")
     publicKeys_hash = hash_pubicKeys(secret)
     if publicKeys_state != publicKeys_hash:
         return "rekey"
@@ -115,11 +116,10 @@ def execute_jobs(args: argparse.Namespace, state, jobs: List[Tuple[Secret, str]]
     for secret, operation in jobs:
         if operation == "generate" or operation == "regenerate":
             generate(args, state, secret)
-
-            generator_function = make_generator_function(args, secret)
-            print(secret.name)
-            print(generator_function)
-            print()
+        elif operation == "rekey":
+            rekey(args, state, secret)
+        elif operation == "delete":
+            delete(args, state, secret)
 
 
 def generate(args: argparse.Namespace, state, secret: Secret):
@@ -130,17 +130,39 @@ def generate(args: argparse.Namespace, state, secret: Secret):
     for key in secret.publicKeys:
         command.extend(["-r", key])
     command.extend(["-o", Path(secret.name)])
-
     subprocess.run(command, check=True, stdin=p_generator.stdout)
 
-    # TODO: update state
+    print(f"successfully (re)generated {secret.name}")
+
+    if secret.name not in state:
+        state[secret.name] = dict()
+    ts = datetime.now().timestamp()
+    state[secret.name]["lastGenerated"] = ts
+    state[secret.name]["lastRekeyed"] = ts
+    state[secret.name]["dependenciesHash"] = hash_dependencies(secret)
+    state[secret.name]["publicKeysHash"] = hash_pubicKeys(secret)
 
 
 def rekey(args: argparse.Namespace, state, secret: Secret):
-    pass
+    p_decrypt = subprocess.Popen(["rage", "--decrypt", "-i", args.identity, Path(secret.name)],
+                                 stdout=subprocess.PIPE)
+
+    command = ["rage", "--encrypt"]
+    for key in secret.publicKeys:
+        command.extend(["-r", key])
+    command.extend(["-o", Path(secret.name)])
+    subprocess.run(command, check=True, stdin=p_decrypt.stdout)
+
+    print(f"successfully rekeyed {secret.name}")
+
+    if secret.name not in state:
+        state[secret.name] = dict()
+    state[secret.name]["lastRekeyed"] = datetime.now().timestamp()
+    state[secret.name]["publicKeysHash"] = hash_pubicKeys(secret)
 
 
 def delete(args: argparse.Namespace, state, secret: Secret):
+    # TODO
     pass
 
 
@@ -225,6 +247,10 @@ def main():
     # Generate all secrets.
     if args.all:
         jobs = make_jobs(args, states, secrets)
+
+        if not jobs:
+            print("All secrets are up to date!")
+            exit(0)
 
         print("The following operations will be performed:")
         colours = {"rekey": "92", "generate": "92", "regenerate": "35", "delete": "91"}
