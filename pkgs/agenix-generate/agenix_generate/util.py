@@ -61,11 +61,11 @@ def _hash(data) -> str:
 
 def hash_dependencies(secret: Secret) -> Optional[str]:
     if secret.generator and secret.generator.dependencies:
-        return _hash(secret.generator.dependencies)
+        return _hash(sorted(secret.generator.dependencies))
 
 
-def hash_pubicKeys(secret: Secret) -> str:
-    return _hash(secret.publicKeys)
+def hash_publicKeys(secret: Secret) -> str:
+    return _hash(sorted(secret.publicKeys))
 
 
 def get_generator_names(args: argparse.Namespace) -> List[str]:
@@ -86,7 +86,7 @@ def make_generator_function(args: argparse.Namespace, secret: Secret) -> str:
     # TODO: also support generators that are simply a string instead of a function?
     expression = (
         f"let"
-        f"  decrypt = \"rage --decrypt -i {args.identity.absolute()}\";"  # TODO
+        f"  decrypt = \"rage --decrypt -i {args.identity.absolute()}\";"
         f"  secrets = import \"{args.rules.absolute()}\";"
         f"  generators = import \"{args.generators.absolute()}\";"
         f"  secret = secrets.\"{secret.name}\";"

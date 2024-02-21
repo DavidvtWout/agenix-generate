@@ -8,7 +8,7 @@ from datetime import datetime
 
 from .util import (
     Secret, SecretName, load_secrets, save_states,
-    hash_dependencies, hash_pubicKeys, input_yes_no,
+    hash_dependencies, hash_publicKeys, input_yes_no,
     make_generator_function,
 )
 
@@ -57,7 +57,7 @@ def make_job(states, secret: Secret) -> Optional[str]:
         return "regenerate"
 
     publicKeys_state = state.get("publicKeysHash")
-    publicKeys_hash = hash_pubicKeys(secret)
+    publicKeys_hash = hash_publicKeys(secret)
     if publicKeys_state != publicKeys_hash:
         return "rekey"
 
@@ -140,7 +140,7 @@ def generate(args: argparse.Namespace, state, secret: Secret):
     state[secret.name]["lastGenerated"] = ts
     state[secret.name]["lastRekeyed"] = ts
     state[secret.name]["dependenciesHash"] = hash_dependencies(secret)
-    state[secret.name]["publicKeysHash"] = hash_pubicKeys(secret)
+    state[secret.name]["publicKeysHash"] = hash_publicKeys(secret)
 
 
 def rekey(args: argparse.Namespace, state, secret: Secret):
@@ -158,7 +158,7 @@ def rekey(args: argparse.Namespace, state, secret: Secret):
     if secret.name not in state:
         state[secret.name] = dict()
     state[secret.name]["lastRekeyed"] = datetime.now().timestamp()
-    state[secret.name]["publicKeysHash"] = hash_pubicKeys(secret)
+    state[secret.name]["publicKeysHash"] = hash_publicKeys(secret)
 
 
 def delete(args: argparse.Namespace, state, secret: Secret):
