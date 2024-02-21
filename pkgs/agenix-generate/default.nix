@@ -1,29 +1,17 @@
-{ lib, stdenv, rage, jq, nix, substituteAll, ageBin ? "${rage}/bin/rage"
-, shellcheck, }:
+{ python3Packages, rage }:
 
-stdenv.mkDerivation rec {
+python3Packages.buildPythonPackage rec {
   pname = "agenix-generate";
   version = "0.0.0";
-  src = substituteAll {
-    src = ./src/agenix-generate.sh;
-    loadSecretsNix = ./src/load-secrets.nix;
-    updateMetaNix = ./src/update-meta.nix;
+  format = "pyproject";
 
-    inherit ageBin version;
-    jqBin = "${jq}/bin/jq";
-    nixEval = "${nix}/bin/nix eval";
+  src = ./.;
+
+  nativeBuildInputs = with python3Packages; [ setuptools ];
+  propagatedBuildInputs = [ ];
+
+  meta = {
+    description = "agenix extension tool that automates generation of secrets";
+    maintainers = [ "David van 't Wout" ];
   };
-  dontUnpack = true;
-
-  doCheck = true;
-  checkInputs = [ shellcheck ];
-  postCheck = ''
-    shellcheck $src
-  '';
-
-  installPhase = ''
-    install -D $src ${placeholder "out"}/bin/agenix-generate
-  '';
-
-  meta.description = "agenix generator extension";
 }

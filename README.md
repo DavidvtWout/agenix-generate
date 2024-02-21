@@ -79,14 +79,15 @@ that the secrets are generated in the correct order.
 WARNING: the script defined by the generator is directly evaluated so watch out what you put in it!
 
 
-### meta.json
-This is an optional feature that can be used to streamline re-generation and re-keying of secrets when needed.
+### agenix-generate.state
+This file is required for agenix-generate to work. `agenix-generate --init .` will create the file in the current
+working directory.
 
-If path is specified with the AGENIX_META env var or the --meta flag, `agenix-generate` will use
-this file to read and store metadata about the secrets. This file contains the generator name, args, 
-and dependencies that where used to generate the secret. It also contains the public keys that the
-secret file is currently encrypted with.
-
+This file describes the state of the secrets.
+`publicKeys`: hash of all the public keys used to generate a secret.
+`generator.dependencies`: hash of the names of the dependencies that the secret was generated with.
+`lastRekeyed`:
+`lastGenerated`:
 
 ### rekeying
 `agenix` has a rekey option. This rekeys all secrets. Selective rekeying is not possible because the pubkeys that

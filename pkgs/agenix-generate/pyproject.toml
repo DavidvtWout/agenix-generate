@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["agenix_generate"]
+
+
+[project]
+name = "agenix-generate"
+description = "agenix extension tool that automates generation of secrets"
+version = "0.0.0"
+authors = [{ name = "David van 't Wout", email = "david@yoctobyte.nl" }]
+dependencies = [  ]
+
+[project.scripts]
+agenix-generate = "agenix_generate.generate:main"
+agenix-check = "agenix_generate.check:main"
