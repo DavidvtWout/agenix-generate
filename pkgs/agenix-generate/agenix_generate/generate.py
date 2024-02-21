@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import subprocess
 from pathlib import Path
 from typing import Dict, List, Set, Tuple
 
@@ -11,57 +12,7 @@ from .util import (
 )
 
 
-def sort_secrets(secrets: List[Secret]):
-    """ In-place topological sort on generator dependencies.
-
-    Also checks some conditions that would make topological sort impossible;
-    - `generator.dependencies` may not refer to self
-    - `generator.dependencies` must refer to existing secrets
-    - dependencies may not be cyclic
-    """
-
-    secret_names = {secret.name for secret in secrets}
-    dependencies: Dict[SecretName, Set[SecretName]] = {secret.name: set() for secret in secrets}
-    inverse_dependencies: Dict[SecretName, Set[SecretName]] = {secret.name: set() for secret in secrets}
-    for secret in secrets:
-        if secret.generator is not None:
-            for dep in secret.generator.dependencies:
-                # This condition would also be caught by the cycle detection but this message is more clear.
-                if dep == secret.name:
-                    print(f"\033[1;91merror:\033[0m generator of '{secret.name}' contains self as dependency")
-                    exit(1)
-                if dep not in secret_names:
-                    print(f"\033[1;91merror:\033[0m dependency '{dep}' of secret '{secret.name}' "
-                          f"is not defined in secrets.nix file")
-                    # TODO: print suggestions (did you mean ...?)
-                    exit(1)
-                dependencies[secret.name].add(dep)
-                inverse_dependencies[dep].add(secret.name)
-
-    sorted_secrets = list()
-    secrets_todo = set(secrets)
-    while secrets_todo:
-        initial_size = len(secrets_todo)
-        for secret in secrets_todo.copy():
-            if not dependencies[secret.name]:
-                sorted_secrets.append(secret)
-                for dep in inverse_dependencies[secret.name]:
-                    dependencies[dep].remove(secret.name)
-                secrets_todo.remove(secret)
-        if len(secrets_todo) == initial_size:
-            lines = [f"\033[1;91merror:\033[0m generator dependency cycle detected with the following secrets:"]
-            for secret in secrets_todo:
-                lines.append(f"  - {secret.name}")
-            print("\n".join(lines))
-            exit(1)
-
-    # repopulate the old secrets list
-    secrets.clear()
-    for secret in sorted_secrets:
-        secrets.append(secret)
-
-
-def make_plan(args: argparse.Namespace, states: Dict, secrets: List[Secret]):
+def make_jobs(args: argparse.Namespace, states: Dict, secrets: List[Secret]):
     jobs = list()
 
     for secret in secrets:
@@ -105,16 +56,84 @@ def make_plan(args: argparse.Namespace, states: Dict, secrets: List[Secret]):
     # TODO: check for secrets on disk that should be removed
     # TODO: regenerate secrets depending on (re)generated secrets
 
+    sort_jobs(jobs)
+
     return jobs
 
 
-def execute_jobs(args: argparse.Namespace, jobs: List[Tuple[Secret, str]]):
+def sort_jobs(jobs: List[Tuple[Secret, str]]):
+    """ In-place topological sort on generator dependencies.
+
+    Also checks some conditions that would make topological sort impossible;
+    - `generator.dependencies` may not refer to self
+    - `generator.dependencies` must refer to existing secrets
+    - dependencies may not be cyclic
+    """
+
+    secret_names = {secret.name for secret, _ in jobs}
+    dependencies: Dict[SecretName, Set[SecretName]] = {secret.name: set() for secret, _ in jobs}
+    inverse_dependencies: Dict[SecretName, Set[SecretName]] = {secret.name: set() for secret, _ in jobs}
+    for secret, _ in jobs:
+        if secret.generator is not None:
+            for dep in secret.generator.dependencies:
+                # This condition would also be caught by the cycle detection but this message is more clear.
+                if dep == secret.name:
+                    print(f"\033[1;91merror:\033[0m generator of '{secret.name}' contains self as dependency")
+                    exit(1)
+                if dep not in secret_names:
+                    print(f"\033[1;91merror:\033[0m dependency '{dep}' of secret '{secret.name}' "
+                          f"is not defined in secrets.nix file")
+                    # TODO: print suggestions (did you mean ...?)
+                    exit(1)
+                dependencies[secret.name].add(dep)
+                inverse_dependencies[dep].add(secret.name)
+
+    sorted_jobs = list()
+    jobs_todo = set(jobs)
+    while jobs_todo:
+        initial_size = len(jobs_todo)
+        for secret, operation in jobs_todo.copy():
+            if not dependencies[secret.name]:
+                sorted_jobs.append((secret, operation))
+                for dep in inverse_dependencies[secret.name]:
+                    dependencies[dep].remove(secret.name)
+                jobs_todo.remove((secret, operation))
+        if len(jobs_todo) == initial_size:
+            lines = [f"\033[1;91merror:\033[0m generator dependency cycle detected with the following secrets:"]
+            for secret, _ in jobs_todo:
+                lines.append(f"  - {secret.name}")
+            print("\n".join(lines))
+            exit(1)
+
+    # repopulate the old jobs list
+    jobs.clear()
+    for job in sorted_jobs:
+        jobs.append(job)
+
+
+def execute_jobs(args: argparse.Namespace, state, jobs: List[Tuple[Secret, str]]):
     for secret, operation in jobs:
         if operation == "generate" or operation == "regenerate":
-            generator_function = make_generator_function(args, secret)
+            generate(args, secret)
+
+            generator_function = make_generator_function(args, state, secret)
             print(secret.name)
             print(generator_function)
             print()
+
+
+def generate(args: argparse.Namespace, state, secret: Secret):
+    f_generator = make_generator_function(args, secret)
+    p_generator = subprocess.Popen(["sh", "-c", f_generator], stdout=subprocess.PIPE)
+
+    command = ["rage", "--encrypt"]
+    for key in secret.publicKeys:
+        command.extend(["-r", key])
+    command.extend(["-o", Path(secret.name)])
+
+    subprocess.run(command, check=True, stdin=p_generator.stdout)
+
+    # TODO: update state
 
 
 def main():
@@ -125,7 +144,7 @@ def main():
     group.add_argument("-a", "--all", action="store_true", help="generate all secrets")
 
     parser.add_argument("--init", type=Path, help="initialize a directory")
-    parser.add_argument("-y", "--yes", type=Path, help="don't ask for confirmation")
+    parser.add_argument("-y", "--yes", action="store_true", help="don't ask for confirmation")
 
     parser.add_argument("-i", "--identity", type=Path, default=os.environ.get("AGENIX_IDENTITY"),
                         help="identity to use when rekeying or decrypting a dependency")
@@ -184,7 +203,7 @@ def main():
 
     # Generate all secrets
     if args.all:
-        jobs = make_plan(args, state, secrets)
+        jobs = make_jobs(args, state, secrets)
 
         print("The following operations will be performed:")
         colours = {"rekey": "92", "generate": "92", "regenerate": "35", "delete": "91"}
@@ -194,7 +213,9 @@ def main():
             exit(0)
         print()
 
-        execute_jobs(args, jobs)
+        execute_jobs(args, state, jobs)
+
+    save_state(state_file, state)
 
 
 if __name__ == '__main__':
