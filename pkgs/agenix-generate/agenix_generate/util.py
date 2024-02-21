@@ -121,7 +121,7 @@ def load_secrets(args: argparse.Namespace) -> List[Secret]:
     return secrets
 
 
-def save_state(state_file: Path, state: Dict):
+def save_states(state_file: Path, state: Dict):
     with open(state_file, "w") as file:
         json.dump(state, file, sort_keys=True)
 

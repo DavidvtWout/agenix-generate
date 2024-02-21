@@ -3,10 +3,10 @@ import json
 import os
 import subprocess
 from pathlib import Path
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from .util import (
-    Secret, SecretName, load_secrets, save_state,
+    Secret, SecretName, load_secrets, save_states,
     hash_dependencies, hash_pubicKeys, input_yes_no,
     make_generator_function,
 )
@@ -14,44 +14,10 @@ from .util import (
 
 def make_jobs(args: argparse.Namespace, states: Dict, secrets: List[Secret]):
     jobs = list()
-
     for secret in secrets:
-        path = Path(secret.name)
-        state = states.get(secret.name)
-
-        # Secret file does not exist.
-        if not path.exists():
-            # Secret does not exist and can't be generated. Should be generated manually.
-            if not secret.generator:
-                print(f"\033[1;35mwarning:\033[0m {secret.name} does not exist on disk and has no generator.")
-            else:
-                jobs.append((secret, "generate"))
-            continue
-
-        # Secret file exists but is not in state file. Rekey or generate to update state file.
-        if state is None:
-            print(
-                f"\033[1;35mwarning:\033[0m {secret.name} exists but is not in the state file. This should never happen.")
-            if secret.generator and secret.generator.dependencies:
-                jobs.append((secret, "regenerate"))
-            else:
-                jobs.append((secret, "rekey"))
-            continue
-
-        # Secret file exists and is in the state file.
-
-        # Check if secret needs to be regenerated.
-        dependencies_state = state.get("generator", dict()).get("dependencies")
-        dependencies_hash = hash_dependencies(secret)
-        if dependencies_state == dependencies_hash and dependencies_hash is not None:
-            jobs.append((secret, "regenerate"))
-            continue
-
-        publicKeys_state = state.get("publicKeys")
-        publicKeys_hash = hash_pubicKeys(secret)
-        if publicKeys_state != publicKeys_hash:
-            jobs.append((secret, "rekey"))
-            continue
+        operation = make_job(states, secret)
+        if operation:
+            jobs.append((secret, operation))
 
     # TODO: check for secrets on disk that should be removed
     # TODO: regenerate secrets depending on (re)generated secrets
@@ -59,6 +25,40 @@ def make_jobs(args: argparse.Namespace, states: Dict, secrets: List[Secret]):
     sort_jobs(jobs)
 
     return jobs
+
+
+def make_job(states, secret: Secret) -> Optional[str]:
+    path = Path(secret.name)
+    state = states.get(secret.name)
+
+    # Secret file does not exist.
+    if not path.exists():
+        if not secret.generator:
+            print(f"\033[1;35mwarning:\033[0m {secret.name} does not exist on disk and has no generator.")
+            return None
+        else:
+            return "generate"
+
+    # Secret file exists but is not in state file. Rekey or generate to update state file.
+    if state is None:
+        print(f"\033[1;35mwarning:\033[0m {secret.name} exists but is not in the state file. This should never happen.")
+        if secret.generator and secret.generator.dependencies:
+            return "regenerate"
+        else:
+            return "rekey"
+
+    # Secret file exists and secret is in the state file.
+
+    # Check if secret needs to be regenerated.
+    dependencies_state = state.get("generator", dict()).get("dependencies")
+    dependencies_hash = hash_dependencies(secret)
+    if dependencies_state == dependencies_hash and dependencies_hash is not None:
+        return "regenerate"
+
+    publicKeys_state = state.get("publicKeys")
+    publicKeys_hash = hash_pubicKeys(secret)
+    if publicKeys_state != publicKeys_hash:
+        return "rekey"
 
 
 def sort_jobs(jobs: List[Tuple[Secret, str]]):
@@ -114,9 +114,9 @@ def sort_jobs(jobs: List[Tuple[Secret, str]]):
 def execute_jobs(args: argparse.Namespace, state, jobs: List[Tuple[Secret, str]]):
     for secret, operation in jobs:
         if operation == "generate" or operation == "regenerate":
-            generate(args, secret)
+            generate(args, state, secret)
 
-            generator_function = make_generator_function(args, state, secret)
+            generator_function = make_generator_function(args, secret)
             print(secret.name)
             print(generator_function)
             print()
@@ -134,6 +134,14 @@ def generate(args: argparse.Namespace, state, secret: Secret):
     subprocess.run(command, check=True, stdin=p_generator.stdout)
 
     # TODO: update state
+
+
+def rekey(args: argparse.Namespace, state, secret: Secret):
+    pass
+
+
+def delete(args: argparse.Namespace, state, secret: Secret):
+    pass
 
 
 def main():
@@ -169,8 +177,8 @@ def main():
             exit(1)
 
         secrets = load_secrets(args)
-        state = {secret.name: dict() for secret in secrets}
-        save_state(state_file, state)
+        states = {secret.name: dict() for secret in secrets}
+        save_states(state_file, states)
         exit(0)
 
     # Check if secret name or --all is set
@@ -186,7 +194,7 @@ def main():
               f"  agenix-generate --init .")
         exit(1)
     with open(state_file, "r") as file:
-        state = json.load(file)
+        states = json.load(file)
 
     if not args.identity:
         print("\033[1;35mwarning:\033[0m No identity file provided. This makes rekeying secrets or "
@@ -194,16 +202,29 @@ def main():
 
     secrets = load_secrets(args)
 
-    # Generate a single secret
+    # Generate a single secret.
     if args.secret:
-        generate(secrets, args.secret)
+        secret = None
+        for s in secrets:
+            if s.name == args.secret:
+                secret = s
+                break
+        if secret is None:
+            print(f"\033[1;91merror:\033[0m Secret not found in {args.rules}")
+            exit(1)
+
+        operation = make_job(states, secret)
+        if operation == "generate" or operation == "regenerate":
+            generate(args, states, secret)
+        else:
+            rekey(args, states, secret)
         exit(0)
 
     # TODO: make sure generators exist before continuing
 
-    # Generate all secrets
+    # Generate all secrets.
     if args.all:
-        jobs = make_jobs(args, state, secrets)
+        jobs = make_jobs(args, states, secrets)
 
         print("The following operations will be performed:")
         colours = {"rekey": "92", "generate": "92", "regenerate": "35", "delete": "91"}
@@ -213,9 +234,9 @@ def main():
             exit(0)
         print()
 
-        execute_jobs(args, state, jobs)
+        execute_jobs(args, states, jobs)
 
-    save_state(state_file, state)
+    save_states(state_file, states)
 
 
 if __name__ == '__main__':
