@@ -41,7 +41,7 @@ def get_operation(states, secret: Secret) -> Operation:
     # Check if secret needs to be regenerated.
     dependencies_state = state.get("dependenciesHash")
     dependencies_hash = hash_dependencies(secret)
-    if dependencies_state == dependencies_hash and dependencies_hash is not None:
+    if dependencies_state != dependencies_hash and dependencies_hash is not None:
         return "regenerate"
 
     publicKeys_state = state.get("publicKeysHash")
