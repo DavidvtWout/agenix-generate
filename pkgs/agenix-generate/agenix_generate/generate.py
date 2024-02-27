@@ -2,9 +2,10 @@ import argparse
 import json
 import os
 import subprocess
-from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
 from datetime import datetime
+from pathlib import Path
+from queue import Queue
+from typing import Dict, List, Literal, Optional, Set, Tuple
 
 from .util import (
     Secret, SecretName, load_secrets, save_states,
@@ -12,23 +13,10 @@ from .util import (
     make_generator_function,
 )
 
-
-def make_jobs(args: argparse.Namespace, states: Dict, secrets: List[Secret]):
-    jobs = list()
-    for secret in secrets:
-        operation = make_job(states, secret)
-        if operation:
-            jobs.append((secret, operation))
-
-    # TODO: check for secrets on disk that should be removed
-    # TODO: regenerate secrets depending on (re)generated secrets
-
-    sort_jobs(jobs)
-
-    return jobs
+Operation = Optional[Literal["generate", "regenerate", "rekey", "delete"]]
 
 
-def make_job(states, secret: Secret) -> Optional[str]:
+def get_operation(states, secret: Secret) -> Operation:
     path = Path(secret.name)
     state = states.get(secret.name)
 
@@ -60,6 +48,23 @@ def make_job(states, secret: Secret) -> Optional[str]:
     publicKeys_hash = hash_publicKeys(secret)
     if publicKeys_state != publicKeys_hash:
         return "rekey"
+
+
+def make_jobs(states: Dict, secrets: List[Secret]):
+    jobs = list()
+    for secret in secrets:
+        operation = get_operation(states, secret)
+        if operation:
+            jobs.append((secret, operation))
+
+    # TODO: check for secrets on disk that should be removed
+    # TODO: regenerate secrets depending on (re)generated secrets
+
+    jobs.sort(key=lambda j: j[0].name)
+
+    # TODO: detect cyclic dependencies, non-existing dependencies, self-reference dependencies.
+
+    return jobs
 
 
 def sort_jobs(jobs: List[Tuple[Secret, str]]):
@@ -113,24 +118,41 @@ def sort_jobs(jobs: List[Tuple[Secret, str]]):
 
 
 def execute_jobs(args: argparse.Namespace, state, jobs: List[Tuple[Secret, str]]):
-    for secret, operation in jobs:
+    job_queue = Queue()
+    for job in jobs:
+        job_queue.put(job)
+
+    secrets_todo = {secret.name for secret, _ in jobs}
+    while secrets_todo:
+        secret, operation = job_queue.get()
+        if operation == "delete":
+            delete(args, state, secret)
+            secrets_todo.remove(secret.name)
+            continue
+
+        if any(dep in secrets_todo for dep in secret.generator.dependencies):
+            job_queue.put((secret, operation))
+            continue
+
         if operation == "generate" or operation == "regenerate":
             generate(args, state, secret)
         elif operation == "rekey":
             rekey(args, state, secret)
-        elif operation == "delete":
-            delete(args, state, secret)
+        secrets_todo.remove(secret.name)
 
 
 def generate(args: argparse.Namespace, state, secret: Secret):
     f_generator = make_generator_function(args, secret)
     p_generator = subprocess.Popen(["sh", "-c", f_generator], stdout=subprocess.PIPE)
 
-    command = ["rage", "--encrypt"]
+    secret_path = Path(secret.name)
+    os.makedirs(secret_path.parent, exist_ok=True)
+    command = ["age", "--encrypt"]
     for key in secret.publicKeys:
         command.extend(["-r", key])
-    command.extend(["-o", Path(secret.name)])
-    subprocess.run(command, check=True, stdin=p_generator.stdout)
+    command.extend(["-o", secret_path])
+    # TODO: error handling
+    subprocess.run(command, check=True, stdin=p_generator.stdout, capture_output=True)
 
     print(f"successfully (re)generated {secret.name}")
 
@@ -144,14 +166,17 @@ def generate(args: argparse.Namespace, state, secret: Secret):
 
 
 def rekey(args: argparse.Namespace, state, secret: Secret):
-    p_decrypt = subprocess.Popen(["rage", "--decrypt", "-i", args.identity, Path(secret.name)],
-                                 stdout=subprocess.PIPE)
+    decrypt_command = ["age", "--decrypt", "-i", args.identity.expanduser(), Path(secret.name)]
+    p_decrypt = subprocess.Popen(decrypt_command, stdout=subprocess.PIPE)
 
-    command = ["rage", "--encrypt"]
+    secret_path = Path(secret.name)
+    os.makedirs(secret_path.parent, exist_ok=True)
+    command = ["age", "--encrypt"]
     for key in secret.publicKeys:
         command.extend(["-r", key])
-    command.extend(["-o", Path(secret.name)])
-    subprocess.run(command, check=True, stdin=p_decrypt.stdout)
+    command.extend(["-o", str(secret_path)])
+    # TODO: error handling
+    subprocess.run(command, check=True, stdin=p_decrypt.stdout, capture_output=True)
 
     print(f"successfully rekeyed {secret.name}")
 
@@ -235,18 +260,19 @@ def main():
             print(f"\033[1;91merror:\033[0m Secret not found in {args.rules}")
             exit(1)
 
-        operation = make_job(states, secret)
+        operation = get_operation(states, secret)
         if operation == "generate" or operation == "regenerate":
             generate(args, states, secret)
         else:
             rekey(args, states, secret)
+        save_states(state_file, states)
         exit(0)
 
     # TODO: make sure generators exist before continuing
 
     # Generate all secrets.
     if args.all:
-        jobs = make_jobs(args, states, secrets)
+        jobs = make_jobs(states, secrets)
 
         if not jobs:
             print("All secrets are up to date!")

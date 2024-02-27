@@ -1,4 +1,4 @@
-{ python3Packages, rage }:
+{ python3Packages, age }:
 
 python3Packages.buildPythonPackage rec {
   pname = "agenix-generate";
@@ -8,7 +8,7 @@ python3Packages.buildPythonPackage rec {
   src = ./.;
 
   nativeBuildInputs = with python3Packages; [ setuptools ];
-  propagatedBuildInputs = [ rage ];
+  propagatedBuildInputs = [ age ];
 
   meta = {
     description = "agenix extension tool that automates generation of secrets";

@@ -86,9 +86,9 @@ def make_generator_function(args: argparse.Namespace, secret: Secret) -> str:
     # TODO: also support generators that are simply a string instead of a function?
     expression = (
         f"let"
-        f"  decrypt = \"rage --decrypt -i {args.identity.absolute()}\";"
-        f"  secrets = import \"{args.rules.absolute()}\";"
-        f"  generators = import \"{args.generators.absolute()}\";"
+        f"  decrypt = \"age --decrypt -i {args.identity.expanduser()}\";"
+        f"  secrets = import \"{args.rules.expanduser().absolute()}\";"
+        f"  generators = import \"{args.generators.expanduser().absolute()}\";"
         f"  secret = secrets.\"{secret.name}\";"
         f"  generator = generators.${{secret.generator.name}};"
         f"  deps = map (name: {{"
