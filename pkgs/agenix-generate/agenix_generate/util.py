@@ -3,55 +3,12 @@ import hashlib
 import json
 import subprocess
 import sys
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+
+from .secret import Secret
+
 
 SecretName = str
-
-
-@dataclass
-class Secret:
-    name: SecretName
-    publicKeys: List[str]
-    generator: Optional['Generator'] = field(default=None)
-
-    @staticmethod
-    def from_dict(name: SecretName, values: Dict) -> 'Secret':
-        s = Secret(name, values["publicKeys"])
-        if "generator" in values:
-            s.generator = Generator.from_dict(values["generator"])
-        return s
-
-    def __eq__(self, other: 'Secret'):
-        if isinstance(other, Secret):
-            return self.name == other.name
-        return NotImplemented
-
-    def __hash__(self):
-        return hash(self.name)
-
-
-@dataclass
-class Generator:
-    name: SecretName
-    args: Dict[str, Any] = field(default_factory=dict)
-    dependencies: List[SecretName] = field(default_factory=list)
-    followArgs: bool = field(default=False)
-    followDeps: bool = field(default=True)
-
-    @staticmethod
-    def from_dict(values: Dict) -> 'Generator':
-        g = Generator(values["name"])
-        if "args" in values:
-            g.args = values["args"]
-        if "dependencies" in values:
-            g.dependencies = values["dependencies"]
-        if "followArgs" in values:
-            g.followArgs = values["followArgs"]
-        if "followDeps" in values:
-            g.followDeps = values["followDeps"]
-        return g
 
 
 def _hash(data) -> str:
@@ -59,7 +16,7 @@ def _hash(data) -> str:
     return m.hexdigest()
 
 
-def hash_dependencies(secret: Secret) -> Optional[str]:
+def hash_dependencies(secret: Secret) -> str | None:
     if secret.generator and secret.generator.dependencies:
         return _hash(sorted(secret.generator.dependencies))
 
@@ -68,7 +25,7 @@ def hash_publicKeys(secret: Secret) -> str:
     return _hash(sorted(secret.publicKeys))
 
 
-def get_generator_names(args: argparse.Namespace) -> List[str]:
+def get_generator_names(args: argparse.Namespace) -> list[str]:
     if not args.generators.exists():
         print(f"\033[1;35mwarning:\033[0m generators file '{args.generators}' does not exist")
         return []
@@ -89,7 +46,7 @@ def make_generator_function(args: argparse.Namespace, secret: Secret) -> str:
         f"  decrypt = \"age --decrypt -i {args.identity.expanduser()}\";"
         f"  secrets = import \"{args.rules.expanduser().absolute()}\";"
         f"  generators = import \"{args.generators.expanduser().absolute()}\";"
-        f"  secret = secrets.\"{secret.name}\";"
+        f"  secret = secrets.\"{secret.path}\";"
         f"  generator = generators.${{secret.generator.name}};"
         f"  deps = map (name: {{"
         f"    path = name;"
@@ -103,7 +60,7 @@ def make_generator_function(args: argparse.Namespace, secret: Secret) -> str:
     return result.stdout
 
 
-def load_secrets(args: argparse.Namespace) -> List[Secret]:
+def load_secrets(args: argparse.Namespace) -> list[Secret]:
     if not args.rules.exists():
         print(f"\033[1;91merror:\033[0m secrets file '{args.rules}' does not exist")
         exit(1)
@@ -113,17 +70,15 @@ def load_secrets(args: argparse.Namespace) -> List[Secret]:
                             capture_output=True, text=True, check=True)
 
     secrets = list()
-    secrets_raw = json.loads(result.stdout)
-    for name, secret_dict in secrets_raw.items():
-        secret = Secret.from_dict(name, secret_dict)
+    for path, secret_dict in json.loads(result.stdout).items():
+        secret = Secret.from_dict(path, secret_dict)
         secrets.append(secret)
-
     return secrets
 
 
-def save_states(state_file: Path, state: Dict):
+def save_states(state_file: Path, state: dict):
     with open(state_file, "w") as file:
-        json.dump(state, file, sort_keys=True)
+        json.dump(state, file, sort_keys=True, indent=2)
 
 
 def input_yes_no(question, default="yes") -> bool:

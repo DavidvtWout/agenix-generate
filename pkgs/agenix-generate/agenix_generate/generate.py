@@ -5,32 +5,33 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 from queue import Queue
-from typing import Dict, List, Literal, Optional, Set, Tuple
+from typing import Literal
 
+from .secret import Secret
 from .util import (
-    Secret, SecretName, load_secrets, save_states,
+    SecretName, load_secrets, save_states,
     hash_dependencies, hash_publicKeys, input_yes_no,
     make_generator_function,
 )
 
-Operation = Optional[Literal["generate", "regenerate", "rekey", "delete"]]
+Operation = Literal["generate", "regenerate", "rekey", "delete"] | None
 
 
 def get_operation(states, secret: Secret) -> Operation:
-    path = Path(secret.name)
-    state = states.get(secret.name)
+    path = Path(secret.path)
+    state = states.get(secret.path)
 
     # Secret file does not exist.
     if not path.exists():
         if not secret.generator:
-            print(f"\033[1;35mwarning:\033[0m {secret.name} does not exist on disk and has no generator.")
+            print(f"\033[1;35mwarning:\033[0m {secret.path} does not exist on disk and has no generator.")
             return None
         else:
             return "generate"
 
     # Secret file exists but is not in state file. Rekey or generate to update state file.
     if state is None:
-        print(f"\033[1;35mwarning:\033[0m {secret.name} exists but is not in the state file. This should never happen.")
+        print(f"\033[1;35mwarning:\033[0m {secret.path} exists but is not in the state file. This should never happen.")
         if secret.generator and secret.generator.dependencies:
             return "regenerate"
         else:
@@ -50,7 +51,7 @@ def get_operation(states, secret: Secret) -> Operation:
         return "rekey"
 
 
-def make_jobs(states: Dict, secrets: List[Secret]):
+def make_jobs(states: dict, secrets: list[Secret]):
     jobs = list()
     for secret in secrets:
         operation = get_operation(states, secret)
@@ -67,7 +68,7 @@ def make_jobs(states: Dict, secrets: List[Secret]):
     return jobs
 
 
-def sort_jobs(jobs: List[Tuple[Secret, str]]):
+def sort_jobs(jobs: list[tuple[Secret, str]]):
     """ In-place topological sort on generator dependencies.
 
     Also checks some conditions that would make topological sort impossible;
@@ -76,38 +77,38 @@ def sort_jobs(jobs: List[Tuple[Secret, str]]):
     - dependencies may not be cyclic
     """
 
-    secret_names = {secret.name for secret, _ in jobs}
-    dependencies: Dict[SecretName, Set[SecretName]] = {secret.name: set() for secret, _ in jobs}
-    inverse_dependencies: Dict[SecretName, Set[SecretName]] = {secret.name: set() for secret, _ in jobs}
+    secret_names = {secret.path for secret, _ in jobs}
+    dependencies: dict[SecretName, set[SecretName]] = {secret.path: set() for secret, _ in jobs}
+    inverse_dependencies: dict[SecretName, set[SecretName]] = {secret.path: set() for secret, _ in jobs}
     for secret, _ in jobs:
         if secret.generator is not None:
             for dep in secret.generator.dependencies:
                 # This condition would also be caught by the cycle detection but this message is more clear.
-                if dep == secret.name:
-                    print(f"\033[1;91merror:\033[0m generator of '{secret.name}' contains self as dependency")
+                if dep == secret.path:
+                    print(f"\033[1;91merror:\033[0m generator of '{secret.path}' contains self as dependency")
                     exit(1)
                 if dep not in secret_names:
-                    print(f"\033[1;91merror:\033[0m dependency '{dep}' of secret '{secret.name}' "
+                    print(f"\033[1;91merror:\033[0m dependency '{dep}' of secret '{secret.path}' "
                           f"is not defined in secrets.nix file")
                     # TODO: print suggestions (did you mean ...?)
                     exit(1)
-                dependencies[secret.name].add(dep)
-                inverse_dependencies[dep].add(secret.name)
+                dependencies[secret.path].add(dep)
+                inverse_dependencies[dep].add(secret.path)
 
     sorted_jobs = list()
     jobs_todo = set(jobs)
     while jobs_todo:
         initial_size = len(jobs_todo)
         for secret, operation in jobs_todo.copy():
-            if not dependencies[secret.name]:
+            if not dependencies[secret.path]:
                 sorted_jobs.append((secret, operation))
-                for dep in inverse_dependencies[secret.name]:
-                    dependencies[dep].remove(secret.name)
+                for dep in inverse_dependencies[secret.path]:
+                    dependencies[dep].remove(secret.path)
                 jobs_todo.remove((secret, operation))
         if len(jobs_todo) == initial_size:
             lines = [f"\033[1;91merror:\033[0m generator dependency cycle detected with the following secrets:"]
             for secret, _ in jobs_todo:
-                lines.append(f"  - {secret.name}")
+                lines.append(f"  - {secret.path}")
             print("\n".join(lines))
             exit(1)
 
@@ -117,17 +118,17 @@ def sort_jobs(jobs: List[Tuple[Secret, str]]):
         jobs.append(job)
 
 
-def execute_jobs(args: argparse.Namespace, state, jobs: List[Tuple[Secret, str]]):
+def execute_jobs(args: argparse.Namespace, state, jobs: list[tuple[Secret, str]]):
     job_queue = Queue()
     for job in jobs:
         job_queue.put(job)
 
-    secrets_todo = {secret.name for secret, _ in jobs}
+    secrets_todo = {secret.path for secret, _ in jobs}
     while secrets_todo:
         secret, operation = job_queue.get()
         if operation == "delete":
             delete(args, state, secret)
-            secrets_todo.remove(secret.name)
+            secrets_todo.remove(secret.path)
             continue
 
         if any(dep in secrets_todo for dep in secret.generator.dependencies):
@@ -138,14 +139,14 @@ def execute_jobs(args: argparse.Namespace, state, jobs: List[Tuple[Secret, str]]
             generate(args, state, secret)
         elif operation == "rekey":
             rekey(args, state, secret)
-        secrets_todo.remove(secret.name)
+        secrets_todo.remove(secret.path)
 
 
 def generate(args: argparse.Namespace, state, secret: Secret):
     f_generator = make_generator_function(args, secret)
     p_generator = subprocess.Popen(["sh", "-c", f_generator], stdout=subprocess.PIPE)
 
-    secret_path = Path(secret.name)
+    secret_path = Path(secret.path)
     os.makedirs(secret_path.parent, exist_ok=True)
     command = ["age", "--encrypt"]
     for key in secret.publicKeys:
@@ -154,22 +155,22 @@ def generate(args: argparse.Namespace, state, secret: Secret):
     # TODO: error handling
     subprocess.run(command, check=True, stdin=p_generator.stdout, capture_output=True)
 
-    print(f"successfully (re)generated {secret.name}")
+    print(f"successfully (re)generated {secret.path}")
 
-    if secret.name not in state:
-        state[secret.name] = dict()
+    if secret.path not in state:
+        state[secret.path] = dict()
     ts = datetime.now().timestamp()
-    state[secret.name]["lastGenerated"] = ts
-    state[secret.name]["lastRekeyed"] = ts
-    state[secret.name]["dependenciesHash"] = hash_dependencies(secret)
-    state[secret.name]["publicKeysHash"] = hash_publicKeys(secret)
+    state[secret.path]["lastGenerated"] = ts
+    state[secret.path]["lastRekeyed"] = ts
+    state[secret.path]["dependenciesHash"] = hash_dependencies(secret)
+    state[secret.path]["publicKeysHash"] = hash_publicKeys(secret)
 
 
 def rekey(args: argparse.Namespace, state, secret: Secret):
-    decrypt_command = ["age", "--decrypt", "-i", args.identity.expanduser(), Path(secret.name)]
+    decrypt_command = ["age", "--decrypt", "-i", args.identity.expanduser(), Path(secret.path)]
     p_decrypt = subprocess.Popen(decrypt_command, stdout=subprocess.PIPE)
 
-    secret_path = Path(secret.name)
+    secret_path = Path(secret.path)
     os.makedirs(secret_path.parent, exist_ok=True)
     command = ["age", "--encrypt"]
     for key in secret.publicKeys:
@@ -178,12 +179,12 @@ def rekey(args: argparse.Namespace, state, secret: Secret):
     # TODO: error handling
     subprocess.run(command, check=True, stdin=p_decrypt.stdout, capture_output=True)
 
-    print(f"successfully rekeyed {secret.name}")
+    print(f"successfully rekeyed {secret.path}")
 
-    if secret.name not in state:
-        state[secret.name] = dict()
-    state[secret.name]["lastRekeyed"] = datetime.now().timestamp()
-    state[secret.name]["publicKeysHash"] = hash_publicKeys(secret)
+    if secret.path not in state:
+        state[secret.path] = dict()
+    state[secret.path]["lastRekeyed"] = datetime.now().timestamp()
+    state[secret.path]["publicKeysHash"] = hash_publicKeys(secret)
 
 
 def delete(args: argparse.Namespace, state, secret: Secret):
@@ -224,7 +225,7 @@ def main():
             exit(1)
 
         secrets = load_secrets(args)
-        states = {secret.name: dict() for secret in secrets}
+        states = {secret.path: dict() for secret in secrets if not secret.generator.optional}
         save_states(state_file, states)
         exit(0)
 
@@ -253,7 +254,7 @@ def main():
     if args.secret:
         secret = None
         for s in secrets:
-            if s.name == args.secret:
+            if s.path == args.secret:
                 secret = s
                 break
         if secret is None:
@@ -281,7 +282,7 @@ def main():
         print("The following operations will be performed:")
         colours = {"rekey": "92", "generate": "92", "regenerate": "35", "delete": "91"}
         for secret, operation in jobs:
-            print(f"- \033[1;{colours[operation]}m{operation: <10}\033[0m {secret.name}")
+            print(f"- \033[1;{colours[operation]}m{operation: <10}\033[0m {secret.path}")
         if not args.yes and not input_yes_no("Do you want to continue?"):
             exit(0)
         print()
